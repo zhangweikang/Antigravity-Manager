@@ -266,6 +266,8 @@ print(response.choices[0].message.content)
         -   **[Core Fix] Docker Warmup 401/502 Error Fix (PR #1479)**:
             -   **Network Optimization**: Used a client with `.no_proxy()` for Warmup requests in Docker environments, preventing localhost requests from being incorrectly routed to external proxies causing 502/401 errors.
             -   **Auth Update**: Exempted `/internal/*` paths from authentication, ensuring internal warmup requests are not intercepted.
+        -   **[UI Optimization] Localize Update Notification (PR #1484)**:
+            -   **i18n Adaptation**: Completely removed hardcoded strings in the update notification dialog, achieving full support for all 12 languages.
     *   **v4.0.15 (2026-02-03)**:
         -   **[Core Optimization] Enhanced Warmup Functionality & False-Positive Fixes (PR #1466)**:
             -   **Logic Optimization**: Removed the hardcoded model whitelist, enabling automatic warmup for all models reaching 100% quota based on account data.
