@@ -260,6 +260,11 @@ print(response.choices[0].message.content)
             -   **Instant Effect**: Fixed an issue where proxy pool configuration changes in memory were not updated when saving settings in WebUI or Docker environments. Modifications now take effect immediately without requiring a restart.
         -   **[Docker Optimization] New Local Binding Restriction Option**:
             -   **Network Security**: Introduced the `ABV_BIND_LOCAL_ONLY` environment variable. When set to `true`, Docker/Headless mode will strictly bind to `127.0.0.1` and no longer expose services to `0.0.0.0` by default, meeting specific security network requirements.
+        -   **[Core Feature] Custom Expiration Time for User Tokens (PR #1722)**:
+            -   **Flexible Control**: Creating user tokens now supports selecting a custom expiration time precise to the minute, no longer limited to preset fixed durations.
+        -   **[Core Fix] Token Editing Sync & Parameter Encapsulation (PR #1720, #1722)**:
+            -   **Data Sync**: Fixed an issue where some fields were not correctly reflected when editing tokens.
+            -   **Refactoring**: Optimized the parameter structure for token creation and updates, improving code maintainability.
     *   **v4.1.10 (2026-02-08)**:
         -   **[Core Feature] Expand CLI Detection Paths to Support Volta (PR #1695)**:
             -   **Path Enhancement**: Added automatic detection support for `.volta/bin` and its internal binaries in both `cli_sync` and `opencode_sync`, ensuring a "zero-config" experience for Volta users when syncing CLI configurations.
