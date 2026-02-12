@@ -265,6 +265,10 @@ print(response.choices[0].message.content)
 
 *   **Changelog**:
     *   **v4.1.16 (2026-02-12)**:
+        -   **[Core Fix] Resolve Claude Protocol (Thinking Model) 400 Errors (V4 Scheme)**:
+            -   **Protocol Alignment**: Completely fixed the `400 Invalid Argument` error caused by parameter structure mismatch when calling models like Claude 3.7/4.5 Thinking via proxy.
+            -   **Unified Injection**: Deprecated the conflicting root-level `thinking` field injection. Now uniformly uses the `generationConfig.thinkingConfig` nested structure recommended by Google's native protocol.
+            -   **Budget Adaptation**: Adapted a default 16k Thinking Budget for Claude models and resolved compilation/runtime exceptions caused by Rust borrow checker conflicts.
         -   **[Core Feature] Enable Native Auto-Update for Linux Platform (PR #1891)**:
             -   **Full Platform Coverage**: Added support for `linux-x86_64` and `linux-aarch64` platforms in `updater.json`, enabling Linux AppImage users to receive auto-update notifications.
             -   **Workflow Optimization**: Automatically detects and reads `.AppImage.sig` signature files for Linux builds, completing the auto-update loop for macOS, Windows, and Linux.
