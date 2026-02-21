@@ -1,77 +1,15 @@
+mod commands;
+pub mod constants;
+pub mod error;
 mod models;
 mod modules;
-mod commands;
+mod proxy; // Proxy service module
 mod utils;
-mod proxy;  // Proxy service module
-pub mod error;
-pub mod constants;
 
-use tauri::Manager;
 use modules::logger;
-use tracing::{info, warn, error};
 use std::sync::Arc;
-
-#[derive(Clone, Copy)]
-struct AppRuntimeFlags {
-    tray_enabled: bool,
-}
-
-fn env_flag_enabled(name: &str) -> bool {
-    std::env::var(name)
-        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(false)
-}
-
-#[cfg(target_os = "linux")]
-fn is_wayland_session() -> bool {
-    std::env::var("WAYLAND_DISPLAY")
-        .map(|v| !v.trim().is_empty())
-        .unwrap_or(false)
-        || std::env::var("XDG_SESSION_TYPE")
-            .map(|v| v.eq_ignore_ascii_case("wayland"))
-            .unwrap_or(false)
-}
-
-fn should_enable_tray() -> bool {
-    if env_flag_enabled("ANTIGRAVITY_DISABLE_TRAY") {
-        info!("Tray disabled by ANTIGRAVITY_DISABLE_TRAY");
-        return false;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        if is_wayland_session() && !env_flag_enabled("ANTIGRAVITY_FORCE_TRAY") {
-            warn!(
-                "Linux Wayland session detected; disabling tray by default to avoid GTK/AppIndicator crashes. Set ANTIGRAVITY_FORCE_TRAY=1 to force-enable."
-            );
-            return false;
-        }
-    }
-
-    true
-}
-
-#[cfg(target_os = "linux")]
-fn configure_linux_gdk_backend() {
-    if std::env::var("GDK_BACKEND").is_ok() {
-        return;
-    }
-
-    let is_wayland = is_wayland_session();
-    let has_x11_display = std::env::var("DISPLAY")
-        .map(|v| !v.trim().is_empty())
-        .unwrap_or(false);
-    let force_wayland = env_flag_enabled("ANTIGRAVITY_FORCE_WAYLAND");
-    let force_x11 = env_flag_enabled("ANTIGRAVITY_FORCE_X11");
-
-    if force_x11 || (is_wayland && has_x11_display && !force_wayland) {
-        // Force X11 backend under Wayland sessions to avoid a GTK Wayland shm crash.
-        std::env::set_var("GDK_BACKEND", "x11");
-        warn!(
-            "Forcing GDK_BACKEND=x11 for stability on Wayland. Set ANTIGRAVITY_FORCE_WAYLAND=1 to keep Wayland backend."
-        );
-    }
-}
+use tauri::Manager;
+use tracing::{error, info, warn};
 
 /// Increase file descriptor limit for macOS to prevent "Too many open files" errors
 #[cfg(target_os = "macos")]
@@ -83,7 +21,10 @@ fn increase_nofile_limit() {
         };
 
         if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rl) == 0 {
-            info!("Current open file limit: soft={}, hard={}", rl.rlim_cur, rl.rlim_max);
+            info!(
+                "Current open file limit: soft={}, hard={}",
+                rl.rlim_cur, rl.rlim_max
+            );
 
             // Attempt to increase to 4096 or maximum hard limit
             let target = 4096.min(rl.rlim_max);
@@ -118,9 +59,6 @@ pub fn run() {
     // Initialize logger
     logger::init_logger();
 
-    #[cfg(target_os = "linux")]
-    configure_linux_gdk_backend();
-
     // Initialize token stats database
     if let Err(e) = modules::token_stats::init_db() {
         error!("Failed to initialize token stats database: {}", e);
@@ -130,7 +68,7 @@ pub fn run() {
     if let Err(e) = modules::security_db::init_db() {
         error!("Failed to initialize security database: {}", e);
     }
-    
+
     // Initialize user token database
     if let Err(e) = modules::user_token_db::init_db() {
         error!("Failed to initialize user token database: {}", e);
@@ -142,6 +80,9 @@ pub fn run() {
         let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
         rt.block_on(async {
             // Initialize states manually
+            let proxy_state = commands::proxy::ProxyServiceState::new();
+            let cf_state = Arc::new(commands::cloudflared::CloudflaredState::new());
+
             // [FIX] Initialize log bridge for headless mode
             // Pass a dummy app handle or None since we don't have a Tauri app handle in headless mode
             // Actually log_bridge relies on AppHandle to emit events.
@@ -163,17 +104,8 @@ pub fn run() {
             match modules::config::load_app_config() {
                 Ok(mut config) => {
                     let mut modified = false;
-                    // Headless/docker 默认允许 LAN 访问（绑定 0.0.0.0）
-                    // 若设置 ABV_BIND_LOCAL_ONLY，则仅绑定 127.0.0.1
-                    let bind_local_only = std::env::var("ABV_BIND_LOCAL_ONLY")
-                        .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-                        .unwrap_or(false);
-                    if bind_local_only {
-                        config.proxy.allow_lan_access = false;
-                        modified = true;
-                    } else {
-                        config.proxy.allow_lan_access = true;
-                    }
+                    // Force LAN access in headless/docker mode so it binds to 0.0.0.0
+                    config.proxy.allow_lan_access = true;
 
                     // [FIX] Force auth mode to AllExceptHealth in headless mode if it's Off or Auto
                     // This ensures Web UI login validation works properly
@@ -287,8 +219,6 @@ pub fn run() {
         return;
     }
 
-    let tray_enabled = should_enable_tray();
-
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -301,17 +231,16 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            let _ = app.get_webview_window("main")
-                .map(|window| {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                    #[cfg(target_os = "macos")]
-                    app.set_activation_policy(tauri::ActivationPolicy::Regular).unwrap_or(());
-                });
+            let _ = app.get_webview_window("main").map(|window| {
+                let _ = window.show();
+                let _ = window.set_focus();
+                #[cfg(target_os = "macos")]
+                app.set_activation_policy(tauri::ActivationPolicy::Regular)
+                    .unwrap_or(());
+            });
         }))
         .manage(commands::proxy::ProxyServiceState::new())
         .manage(commands::cloudflared::CloudflaredState::new())
-        .manage(AppRuntimeFlags { tray_enabled })
         .setup(|app| {
             info!("Setup starting...");
 
@@ -324,9 +253,7 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             {
                 use tauri::Manager;
-                if is_wayland_session() {
-                    info!("Linux Wayland session detected; skipping transparent window workaround");
-                } else if let Some(window) = app.get_webview_window("main") {
+                if let Some(window) = app.get_webview_window("main") {
                     // Access GTK window and disable transparency at the GTK level
                     if let Ok(gtk_window) = window.gtk_window() {
                         use gtk::prelude::WidgetExt;
@@ -336,19 +263,14 @@ pub fn run() {
                             if let Some(visual) = screen.system_visual() {
                                 gtk_window.set_visual(Some(&visual));
                             }
-                            info!("Linux: Applied transparent window workaround");
                         }
+                        info!("Linux: Applied transparent window workaround");
                     }
                 }
             }
 
-            let runtime_flags = app.state::<AppRuntimeFlags>();
-            if runtime_flags.tray_enabled {
-                modules::tray::create_tray(app.handle())?;
-                info!("Tray created");
-            } else {
-                info!("Tray disabled for this session");
-            }
+            modules::tray::create_tray(app.handle())?;
+            info!("Tray created");
 
             // 立即启动管理服务器 (8045)，以便 Web 端能访问
             let handle = app.handle().clone();
@@ -357,7 +279,8 @@ pub fn run() {
                 if let Ok(config) = modules::config::load_app_config() {
                     let state = handle.state::<commands::proxy::ProxyServiceState>();
                     let cf_state = handle.state::<commands::cloudflared::CloudflaredState>();
-                    let integration = crate::modules::integration::SystemManager::Desktop(handle.clone());
+                    let integration =
+                        crate::modules::integration::SystemManager::Desktop(handle.clone());
 
                     // 1. 确保管理后台开启
                     if let Err(e) = commands::proxy::ensure_admin_server(
@@ -365,10 +288,15 @@ pub fn run() {
                         &state,
                         integration.clone(),
                         Arc::new(cf_state.inner().clone()),
-                    ).await {
+                    )
+                    .await
+                    {
                         error!("Failed to start admin server: {}", e);
                     } else {
-                        info!("Admin server (port {}) started successfully", config.proxy.port);
+                        info!(
+                            "Admin server (port {}) started successfully",
+                            config.proxy.port
+                        );
                     }
 
                     // 2. 自动启动转发逻辑
@@ -378,7 +306,9 @@ pub fn run() {
                             &state,
                             integration,
                             Arc::new(cf_state.inner().clone()),
-                        ).await {
+                        )
+                        .await
+                        {
                             error!("Failed to auto-start proxy service: {}", e);
                         } else {
                             info!("Proxy service auto-started successfully");
@@ -389,7 +319,10 @@ pub fn run() {
 
             // Start smart scheduler
             let scheduler_state = app.handle().state::<commands::proxy::ProxyServiceState>();
-            modules::scheduler::start_scheduler(Some(app.handle().clone()), scheduler_state.inner().clone());
+            modules::scheduler::start_scheduler(
+                Some(app.handle().clone()),
+                scheduler_state.inner().clone(),
+            );
 
             // [PHASE 1] 已整合至 Axum 端口 (8045)，不再单独启动 19527 端口
             info!("Management API integrated into main proxy server (port 8045)");
@@ -398,24 +331,16 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let tray_enabled = window
-                    .app_handle()
-                    .try_state::<AppRuntimeFlags>()
-                    .map(|flags| flags.tray_enabled)
-                    .unwrap_or(true);
-
-                if tray_enabled {
-                    let _ = window.hide();
-                    #[cfg(target_os = "macos")]
-                    {
-                        use tauri::Manager;
-                        window
-                            .app_handle()
-                            .set_activation_policy(tauri::ActivationPolicy::Accessory)
-                            .unwrap_or(());
-                    }
-                    api.prevent_close();
+                let _ = window.hide();
+                #[cfg(target_os = "macos")]
+                {
+                    use tauri::Manager;
+                    window
+                        .app_handle()
+                        .set_activation_policy(tauri::ActivationPolicy::Accessory)
+                        .unwrap_or(());
                 }
+                api.prevent_close();
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -468,8 +393,6 @@ pub fn run() {
             commands::get_antigravity_path,
             commands::get_antigravity_args,
             commands::check_for_updates,
-            commands::check_homebrew_installation,
-            commands::brew_upgrade_cask,
             commands::get_update_settings,
             commands::save_update_settings,
             commands::should_check_updates,
@@ -538,11 +461,6 @@ pub fn run() {
             proxy::opencode_sync::execute_opencode_sync,
             proxy::opencode_sync::execute_opencode_restore,
             proxy::opencode_sync::get_opencode_config_content,
-            proxy::opencode_sync::execute_opencode_clear,
-            proxy::droid_sync::get_droid_sync_status,
-            proxy::droid_sync::execute_droid_sync,
-            proxy::droid_sync::execute_droid_restore,
-            proxy::droid_sync::get_droid_config_content,
             // Security/IP monitoring commands
             commands::security::get_ip_access_logs,
             commands::security::get_ip_stats,
@@ -580,6 +498,17 @@ pub fn run() {
             commands::user_token::renew_user_token,
             commands::user_token::get_token_ip_bindings,
             commands::user_token::get_user_token_summary,
+            // Perplexity commands
+            commands::perplexity::perplexity_start_login,
+            commands::perplexity::perplexity_submit_cookies,
+            commands::perplexity::perplexity_complete_login,
+            commands::perplexity::perplexity_cancel_login,
+            commands::perplexity::perplexity_validate_cookies,
+            commands::perplexity::perplexity_get_login_url,
+            commands::perplexity::perplexity_list_accounts,
+            commands::perplexity::perplexity_delete_account,
+            commands::perplexity::perplexity_get_config,
+            commands::perplexity::perplexity_save_config,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -588,23 +517,30 @@ pub fn run() {
                 // Handle app exit - cleanup background tasks
                 tauri::RunEvent::Exit => {
                     tracing::info!("Application exiting, cleaning up background tasks...");
-                    if let Some(state) = app_handle.try_state::<crate::commands::proxy::ProxyServiceState>() {
+                    if let Some(state) =
+                        app_handle.try_state::<crate::commands::proxy::ProxyServiceState>()
+                    {
                         tauri::async_runtime::block_on(async {
                             // Use timeout-based read() instead of try_read() to handle lock contention
                             match tokio::time::timeout(
                                 std::time::Duration::from_secs(3),
-                                state.instance.read()
-                            ).await {
+                                state.instance.read(),
+                            )
+                            .await
+                            {
                                 Ok(guard) => {
                                     if let Some(instance) = guard.as_ref() {
                                         // Use graceful_shutdown with 2s timeout for task cleanup
-                                        instance.token_manager
+                                        instance
+                                            .token_manager
                                             .graceful_shutdown(std::time::Duration::from_secs(2))
                                             .await;
                                     }
                                 }
                                 Err(_) => {
-                                    tracing::warn!("Lock acquisition timed out after 3s, forcing exit");
+                                    tracing::warn!(
+                                        "Lock acquisition timed out after 3s, forcing exit"
+                                    );
                                 }
                             }
                         });
@@ -617,7 +553,9 @@ pub fn run() {
                         let _ = window.show();
                         let _ = window.unminimize();
                         let _ = window.set_focus();
-                        app_handle.set_activation_policy(tauri::ActivationPolicy::Regular).unwrap_or(());
+                        app_handle
+                            .set_activation_policy(tauri::ActivationPolicy::Regular)
+                            .unwrap_or(());
                     }
                 }
                 _ => {}

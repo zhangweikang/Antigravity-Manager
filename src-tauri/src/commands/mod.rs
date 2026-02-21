@@ -15,6 +15,8 @@ pub mod security;
 pub mod proxy_pool;
 // 导出 user_token 命令
 pub mod user_token;
+// 导出 perplexity 命令
+pub mod perplexity;
 
 /// 列出所有账号
 #[tauri::command]
@@ -372,10 +374,8 @@ pub async fn save_config(
         instance.axum_server.update_user_agent(&config.proxy).await;
         // 更新 Thinking Budget 配置
         crate::proxy::update_thinking_budget_config(config.proxy.thinking_budget.clone());
-        // [NEW] 更新全局系统提示词配置
-        crate::proxy::update_global_system_prompt_config(config.proxy.global_system_prompt.clone());
-        // [NEW] 更新全局图像思维模式配置
-        crate::proxy::update_image_thinking_mode(config.proxy.image_thinking_mode.clone());
+        // 更新 Perplexity Proxy URL 配置
+        crate::proxy::update_perplexity_proxy_url(config.proxy.perplexity_proxy_url.clone());
         // 更新代理池配置
         instance
             .axum_server
@@ -742,21 +742,6 @@ pub async fn update_last_check_time() -> Result<(), String> {
     crate::modules::update_checker::update_last_check_time()
 }
 
-
-/// 检测是否通过 Homebrew Cask 安装
-#[tauri::command]
-pub async fn check_homebrew_installation() -> Result<bool, String> {
-    Ok(crate::modules::update_checker::is_homebrew_installed())
-}
-
-/// 通过 Homebrew Cask 升级应用
-#[tauri::command]
-pub async fn brew_upgrade_cask() -> Result<String, String> {
-    modules::logger::log_info("收到前端触发的 Homebrew 升级请求");
-    crate::modules::update_checker::brew_upgrade_cask().await
-}
-
-
 /// 获取更新设置
 #[tauri::command]
 pub async fn get_update_settings() -> Result<crate::modules::update_checker::UpdateSettings, String>
@@ -819,9 +804,11 @@ pub async fn toggle_proxy_status(
     }
 
     // 3. 保存到磁盘
-    let json_str = serde_json::to_string_pretty(&account_json)
-        .map_err(|e| format!("序列化账号数据失败: {}", e))?;
-    std::fs::write(&account_path, json_str).map_err(|e| format!("写入账号文件失败: {}", e))?;
+    std::fs::write(
+        &account_path,
+        serde_json::to_string_pretty(&account_json).unwrap(),
+    )
+    .map_err(|e| format!("写入账号文件失败: {}", e))?;
 
     modules::logger::log_info(&format!(
         "账号反代状态已更新: {} ({})",
@@ -877,11 +864,6 @@ pub async fn warm_up_account(account_id: String) -> Result<String, String> {
 /// 更新账号自定义标签
 #[tauri::command]
 pub async fn update_account_label(account_id: String, label: String) -> Result<(), String> {
-    // 验证标签长度（按字符数计算，支持中文）
-    if label.chars().count() > 15 {
-        return Err("标签长度不能超过15个字符".to_string());
-    }
-
     modules::logger::log_info(&format!(
         "更新账号标签: {} -> {:?}",
         account_id,
@@ -912,9 +894,11 @@ pub async fn update_account_label(account_id: String, label: String) -> Result<(
     }
 
     // 3. 保存到磁盘
-    let json_str = serde_json::to_string_pretty(&account_json)
-        .map_err(|e| format!("序列化账号数据失败: {}", e))?;
-    std::fs::write(&account_path, json_str).map_err(|e| format!("写入账号文件失败: {}", e))?;
+    std::fs::write(
+        &account_path,
+        serde_json::to_string_pretty(&account_json).unwrap(),
+    )
+    .map_err(|e| format!("写入账号文件失败: {}", e))?;
 
     modules::logger::log_info(&format!(
         "账号标签已更新: {} ({})",

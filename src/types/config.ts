@@ -25,6 +25,7 @@ export interface ProxyConfig {
     global_system_prompt?: GlobalSystemPromptConfig;
     image_thinking_mode?: 'enabled' | 'disabled'; // [NEW] 图像思维模式开关
     proxy_pool?: ProxyPoolConfig;
+    perplexity_proxy_url?: string; // Perplexity本地代理地址，默认 http://127.0.0.1:8046
 }
 
 // ============================================================================

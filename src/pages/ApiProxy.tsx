@@ -1746,6 +1746,34 @@ print(response.choices[0].message.content)`;
                                 </div>
                             </CollapsibleCard>
 
+                            {/* Perplexity Proxy */}
+                            <CollapsibleCard
+                                title={t('proxy.config.perplexity.title', { defaultValue: 'Perplexity Proxy' })}
+                                icon={<Sparkles size={18} className="text-purple-500" />}
+                            >
+                                <div className="space-y-3">
+                                    <div className="space-y-1">
+                                        <label className="text-[11px] font-medium text-gray-500 dark:text-gray-400 flex items-center gap-1">
+                                            {t('proxy.config.perplexity.proxy_url', { defaultValue: 'Local Perplexity Proxy URL' })}
+                                            <HelpTooltip
+                                                text={t('proxy.config.perplexity.proxy_url_tooltip', { defaultValue: 'URL of the local Perplexity proxy server. Default: http://127.0.0.1:8046' })}
+                                                placement="right"
+                                            />
+                                        </label>
+                                        <input
+                                            type="text"
+                                            value={appConfig.proxy.perplexity_proxy_url || 'http://127.0.0.1:8046'}
+                                            onChange={(e) => updateProxyConfig({ perplexity_proxy_url: e.target.value })}
+                                            placeholder="http://127.0.0.1:8046"
+                                            className="input input-sm input-bordered w-full font-mono text-xs"
+                                        />
+                                        <p className="text-[10px] text-gray-400">
+                                            {t('proxy.config.perplexity.proxy_url_hint', { defaultValue: 'Configure the local Perplexity proxy address. When using perplexity_ prefixed models, requests will be forwarded to this address.' })}
+                                        </p>
+                                    </div>
+                                </div>
+                            </CollapsibleCard>
+
                             {/* Account Scheduling & Rotation */}
                             <CollapsibleCard
                                 title={t('proxy.config.scheduling.title')}

@@ -11,13 +11,22 @@ use tracing::{debug, error, info};
 use crate::proxy::common::client_adapter::CLIENT_ADAPTERS;
 use crate::proxy::debug_logger;
 use crate::proxy::handlers::common::{
+<<<<<<< HEAD
     apply_retry_strategy, determine_retry_strategy, should_rotate_account,
+=======
+    apply_retry_strategy, determine_retry_strategy, should_rotate_account, RetryStrategy,
+>>>>>>> 33f3a70 (feat: add Perplexity tools integration - proxy handlers, auth module, and UI components)
 };
 use crate::proxy::mappers::gemini::{unwrap_response, wrap_request};
 use crate::proxy::server::AppState;
 use crate::proxy::session_manager::SessionManager;
+<<<<<<< HEAD
 use crate::proxy::upstream::client::mask_email;
 use axum::http::HeaderMap;
+=======
+use axum::http::HeaderMap;
+use tokio::time::Duration; // [NEW] Adapter Registry
+>>>>>>> 33f3a70 (feat: add Perplexity tools integration - proxy handlers, auth module, and UI components)
 
 const MAX_RETRY_ATTEMPTS: usize = 3;
 
@@ -29,6 +38,19 @@ pub async fn handle_generate(
     headers: HeaderMap,          // [NEW] Extract headers for adapter detection
     Json(mut body): Json<Value>, // 改为 mut 以支持修复提示词注入
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
+    // [NEW] Perplexity Proxy Routing for Gemini Protocol
+    if model_action.starts_with("perplexity_") {
+        return Ok(
+            crate::proxy::handlers::perplexity::divert_to_local_proxy_gemini(
+                headers,
+                body,
+                model_action,
+            )
+            .await
+            .into_response(),
+        );
+    }
+
     // 解析 model:method
     let (model_name, method) = if let Some((m, action)) = model_action.rsplit_once(':') {
         (m.to_string(), action.to_string())
@@ -123,7 +145,10 @@ pub async fn handle_generate(
             &tools_val,
             None,        // size (not applicable for Gemini native protocol)
             None,        // quality
+<<<<<<< HEAD
             None,        // [NEW] image_size
+=======
+>>>>>>> 33f3a70 (feat: add Perplexity tools integration - proxy handlers, auth module, and UI components)
             Some(&body), // [NEW] Pass request body for imageConfig parsing
         );
 
@@ -195,7 +220,11 @@ pub async fn handle_generate(
             );
         }
 
+<<<<<<< HEAD
         let call_result = match upstream
+=======
+        let response = match upstream
+>>>>>>> 33f3a70 (feat: add Perplexity tools integration - proxy handlers, auth module, and UI components)
             .call_v1_internal_with_headers(
                 upstream_method,
                 &access_token,
@@ -513,6 +542,14 @@ pub async fn handle_generate(
 
         // 处理错误并重试
         let status_code = status.as_u16();
+<<<<<<< HEAD
+=======
+        let retry_after = response
+            .headers()
+            .get("Retry-After")
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.to_string());
+>>>>>>> 33f3a70 (feat: add Perplexity tools integration - proxy handlers, auth module, and UI components)
         let error_text = response
             .text()
             .await

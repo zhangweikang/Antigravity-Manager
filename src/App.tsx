@@ -8,6 +8,7 @@ import ApiProxy from './pages/ApiProxy';
 import Monitor from './pages/Monitor';
 import TokenStats from './pages/TokenStats';
 import Security from './pages/Security';
+// Perplexity配置已集成到API反代页面中
 import ThemeManager from './components/common/ThemeManager';
 import UserToken from './pages/UserToken';
 import { UpdateNotification } from './components/UpdateNotification';
@@ -54,6 +55,7 @@ const router = createBrowserRouter([
         path: 'security',
         element: <Security />,
       },
+
       {
         path: 'settings',
         element: <Settings />,

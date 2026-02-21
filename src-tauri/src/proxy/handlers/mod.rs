@@ -4,6 +4,7 @@
 pub mod claude;
 pub mod openai;
 pub mod gemini;
+pub mod perplexity;
 pub mod mcp;
 pub mod common;
 pub mod audio;  // 音频转录处理器

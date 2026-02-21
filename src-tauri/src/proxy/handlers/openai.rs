@@ -13,7 +13,6 @@ use crate::proxy::mappers::openai::{
 // use crate::proxy::upstream::client::UpstreamClient; // 通过 state 获取
 use crate::proxy::debug_logger;
 use crate::proxy::server::AppState;
-use crate::proxy::upstream::client::mask_email;
 
 const MAX_RETRY_ATTEMPTS: usize = 3;
 use super::common::{
@@ -23,7 +22,6 @@ use crate::proxy::common::client_adapter::CLIENT_ADAPTERS; // [NEW] Adapter Regi
 use crate::proxy::session_manager::SessionManager;
 use axum::http::HeaderMap;
 use tokio::time::Duration;
-use crate::modules::account;
 
 pub async fn handle_chat_completions(
     State(state): State<AppState>,
@@ -103,6 +101,29 @@ pub async fn handle_chat_completions(
             });
     }
 
+    // [NEW] Automatic Dispatch for Perplexity Models
+    // If the model starts with "sonar", "pplx", or "llama-3-sonar", dispatch to Perplexity handler
+    // This allows users to use the standard /v1/chat/completions endpoint
+    let model_lower = openai_req.model.to_lowercase();
+    if model_lower.starts_with("sonar")
+        || model_lower.starts_with("pplx")
+        || model_lower.starts_with("llama-3-sonar")
+        || model_lower.starts_with("perplexity_")
+    // [NEW] Support generic perplexity prefix
+    {
+        tracing::info!(
+            "[Router] Detecting Perplexity model '{}', dispatching to Perplexity handler",
+            openai_req.model
+        );
+        return Ok(crate::proxy::handlers::perplexity::handle_chat_completions(
+            State(state),
+            headers,
+            Json(original_body), // Use original_body to avoid move error (E0382)
+        )
+        .await
+        .into_response());
+    }
+
     let trace_id = format!("req_{}", chrono::Utc::now().timestamp_subsec_millis());
     info!(
         "[{}] OpenAI Chat Request: {} | {} messages | stream: {}",
@@ -167,8 +188,7 @@ pub async fn handle_chat_completions(
             &tools_val,
             None, // size (not used in handler, transform_openai_request handles it)
             None, // quality
-            None, // image_size
-            None, // body
+            None, // OpenAI handler uses transform_openai_request for image gen
         );
 
         // 3. 提取 SessionId (粘性指纹)
@@ -262,7 +282,7 @@ pub async fn handle_chat_completions(
             );
         }
 
-        let call_result = match upstream
+        let response = match upstream
             .call_v1_internal_with_headers(
                 method,
                 &access_token,
@@ -286,41 +306,6 @@ pub async fn handle_chat_completions(
             }
         };
 
-        // [NEW] 记录端点降级日志到 debug 文件
-        if !call_result.fallback_attempts.is_empty() && debug_logger::is_enabled(&debug_cfg) {
-            let fallback_entries: Vec<Value> = call_result
-                .fallback_attempts
-                .iter()
-                .map(|a| {
-                    json!({
-                        "endpoint_url": a.endpoint_url,
-                        "status": a.status,
-                        "error": a.error,
-                    })
-                })
-                .collect();
-            let payload = json!({
-                "kind": "endpoint_fallback",
-                "protocol": "openai",
-                "trace_id": trace_id,
-                "original_model": openai_req.model,
-                "mapped_model": mapped_model,
-                "attempt": attempt,
-                "account": mask_email(&email),
-                "fallback_attempts": fallback_entries,
-            });
-            debug_logger::write_debug_payload(
-                &debug_cfg,
-                Some(&trace_id),
-                "endpoint_fallback",
-                &payload,
-            )
-            .await;
-        }
-
-        let response = call_result.response;
-        // [NEW] 提取实际请求的上游端点 URL，用于日志记录和排查
-        let upstream_url = response.url().to_string();
         let status = response.status();
         if status.is_success() {
             // 5. 处理流式 vs 非流式
@@ -337,9 +322,8 @@ pub async fn handle_chat_completions(
                     "request_type": config.request_type,
                     "attempt": attempt,
                     "status": status.as_u16(),
-                    "upstream_url": upstream_url,
                 });
-                let gemini_stream = debug_logger::wrap_stream_with_debug(
+                let gemini_stream = debug_logger::wrap_reqwest_stream_with_debug(
                     Box::pin(response.bytes_stream()),
                     debug_cfg.clone(),
                     trace_id.clone(),
@@ -518,8 +502,6 @@ pub async fn handle_chat_completions(
                 "request_type": config.request_type,
                 "attempt": attempt,
                 "status": status_code,
-                "upstream_url": upstream_url,
-                "account": mask_email(&email),
                 "error_text": error_text,
             });
             debug_logger::write_debug_payload(
@@ -1146,8 +1128,7 @@ pub async fn handle_completions(
             &tools_val,
             None, // size
             None, // quality
-            None, // image_size
-            None, // body
+            None, // OpenAI handler uses transform_openai_request for image gen
         );
 
         // 3. 提取 SessionId (复用)
@@ -1206,7 +1187,7 @@ pub async fn handle_completions(
         };
         let query_string = if list_response { Some("alt=sse") } else { None };
 
-        let call_result = match upstream
+        let response = match upstream
             .call_v1_internal(
                 method,
                 &access_token,
@@ -1229,7 +1210,6 @@ pub async fn handle_completions(
             }
         };
 
-        let response = call_result.response;
         let status = response.status();
         if status.is_success() {
             // [智能限流] 请求成功，重置该账号的连续失败计数
@@ -1618,12 +1598,6 @@ pub async fn handle_images_generations(
         .get("quality")
         .and_then(|v| v.as_str())
         .unwrap_or("standard");
-
-    let image_size = body
-        .get("image_size")
-        .or(body.get("imageSize"))
-        .and_then(|v| v.as_str());
-
     let style = body
         .get("style")
         .and_then(|v| v.as_str())
@@ -1644,7 +1618,6 @@ pub async fn handle_images_generations(
         model,
         Some(size),
         Some(quality),
-        image_size,
     );
 
     // 3. Prompt Enhancement（保留原有逻辑）
@@ -1684,7 +1657,7 @@ pub async fn handle_images_generations(
             for attempt in 0..max_attempts {
                 // 4.1 获取 Token
                 let (access_token, project_id, email, account_id, _wait_ms) = match token_manager
-                    .get_token("image_gen", attempt > 0, None, "gemini-3-pro-image")
+                    .get_token("image_gen", attempt > 0, None, "dall-e-3")
                     .await
                 {
                     Ok(t) => t,
@@ -1733,8 +1706,7 @@ pub async fn handle_images_generations(
                     )
                     .await
                 {
-                    Ok(call_result) => {
-                        let response = call_result.response;
+                    Ok(response) => {
                         let status = response.status();
                         if !status.is_success() {
                             let err_text = response.text().await.unwrap_or_default();
@@ -1879,11 +1851,6 @@ pub async fn handle_images_generations(
         "data": images
     });
 
-    // [FIX] 图像生成成功后触发配额刷新 (Issue #1995)
-    tokio::spawn(async move {
-        let _ = account::refresh_all_quotas_logic().await;
-    });
-
     let email_header = used_email.unwrap_or_default();
     Ok((
         StatusCode::OK,
@@ -2018,7 +1985,6 @@ pub async fn handle_images_edits(
         &model,
         size_input,
         quality_input,
-        image_size_param.as_deref(), // [NEW] Pass direct image_size param
     );
 
     // 3. Construct Contents
@@ -2087,7 +2053,7 @@ pub async fn handle_images_edits(
             for attempt in 0..max_attempts {
                 // 4.1 获取 Token
                 let (access_token, project_id, email, account_id, _wait_ms) = match token_manager
-                    .get_token("image_gen", attempt > 0, None, "gemini-3-pro-image")
+                    .get_token("image_gen", attempt > 0, None, "dall-e-3")
                     .await
                 {
                     Ok(t) => t,
@@ -2142,8 +2108,7 @@ pub async fn handle_images_edits(
                     )
                     .await
                 {
-                    Ok(call_result) => {
-                        let response = call_result.response;
+                    Ok(response) => {
                         let status = response.status();
                         if !status.is_success() {
                             let err_text = response.text().await.unwrap_or_default();

@@ -426,6 +426,19 @@ impl AxumServer {
                 "/v1beta/models/:model/countTokens",
                 post(handlers::gemini::handle_count_tokens),
             ) // Specific route priority
+            // Perplexity Protocol
+            .route(
+                "/v1/perplexity/chat/completions",
+                post(handlers::perplexity::handle_chat_completions),
+            )
+            .route(
+                "/v1/perplexity/models",
+                get(handlers::perplexity::handle_list_models),
+            )
+            .route(
+                "/v1/perplexity/health",
+                get(handlers::perplexity::handle_health),
+            )
             .route(
                 "/v1/models/detect",
                 post(handlers::common::handle_detect_model),

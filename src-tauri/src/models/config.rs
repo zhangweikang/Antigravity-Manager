@@ -1,6 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::proxy::ProxyConfig;
-use crate::modules::cloudflared::CloudflaredConfig;
+use serde::{Deserialize, Serialize};
 
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -8,16 +7,16 @@ pub struct AppConfig {
     pub language: String,
     pub theme: String,
     pub auto_refresh: bool,
-    pub refresh_interval: i32,  // minutes
+    pub refresh_interval: i32, // minutes
     pub auto_sync: bool,
-    pub sync_interval: i32,  // minutes
+    pub sync_interval: i32, // minutes
     pub default_export_path: Option<String>,
     #[serde(default)]
     pub proxy: ProxyConfig,
     pub antigravity_executable: Option<String>, // [NEW] Manually specified Antigravity executable path
-    pub antigravity_args: Option<Vec<String>>, // [NEW] Antigravity startup arguments
+    pub antigravity_args: Option<Vec<String>>,  // [NEW] Antigravity startup arguments
     #[serde(default)]
-    pub auto_launch: bool,  // Launch on startup
+    pub auto_launch: bool, // Launch on startup
     #[serde(default)]
     pub scheduled_warmup: ScheduledWarmupConfig, // [NEW] Scheduled warmup configuration
     #[serde(default)]
@@ -29,7 +28,34 @@ pub struct AppConfig {
     #[serde(default)]
     pub hidden_menu_items: Vec<String>, // Hidden menu item path list
     #[serde(default)]
-    pub cloudflared: CloudflaredConfig, // [NEW] Cloudflared configuration
+    pub perplexity: PerplexityConfig, // [NEW] Perplexity configuration
+}
+
+/// Perplexity configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerplexityConfig {
+    /// Whether usage of Perplexity accounts/proxy is enabled
+    pub enabled: bool,
+    /// Global API Key (fallback if no account is available)
+    pub api_key: Option<String>,
+    /// Default model to use (e.g. "sonar")
+    pub default_model: String,
+}
+
+impl PerplexityConfig {
+    pub fn new() -> Self {
+        Self {
+            enabled: false,
+            api_key: None,
+            default_model: "sonar".to_string(),
+        }
+    }
+}
+
+impl Default for PerplexityConfig {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Scheduled warmup configuration
@@ -46,7 +72,7 @@ pub struct ScheduledWarmupConfig {
 fn default_warmup_models() -> Vec<String> {
     vec![
         "gemini-3-flash".to_string(),
-        "claude".to_string(),
+        "claude-sonnet-4-5".to_string(),
         "gemini-3-pro-high".to_string(),
         "gemini-3-pro-image".to_string(),
     ]
@@ -72,7 +98,7 @@ impl Default for ScheduledWarmupConfig {
 pub struct QuotaProtectionConfig {
     /// Whether quota protection is enabled
     pub enabled: bool,
-    
+
     /// Reserved quota percentage (1-99)
     pub threshold_percentage: u32,
 
@@ -83,7 +109,7 @@ pub struct QuotaProtectionConfig {
 
 fn default_monitored_models() -> Vec<String> {
     vec![
-        "claude".to_string(),
+        "claude-sonnet-4-5".to_string(),
         "gemini-3-pro-high".to_string(),
         "gemini-3-flash".to_string(),
         "gemini-3-pro-image".to_string(),
@@ -187,7 +213,7 @@ impl AppConfig {
             pinned_quota_models: PinnedQuotaModelsConfig::default(),
             circuit_breaker: CircuitBreakerConfig::default(),
             hidden_menu_items: Vec::new(),
-            cloudflared: CloudflaredConfig::default(),
+            perplexity: PerplexityConfig::default(),
         }
     }
 }
